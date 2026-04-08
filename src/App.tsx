@@ -24,7 +24,7 @@ import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 
 // Initialize Gemini
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const ai = new GoogleGenAI("AIzaSyD2mmUFNvih2sBShM7OXfSarWkyIcPPEs0");
 
 interface Message {
   id: string;
@@ -328,7 +328,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="flex-1 flex overflow-hidden relative">
+      <main className="flex-1 flex min-h-0 relative">
         {/* Sidebar - Desktop */}
         <aside className="hidden lg:flex w-64 border-r border-zinc-800 flex-col bg-zinc-900/10">
           <div className="p-4 space-y-6">
@@ -421,7 +421,7 @@ export default function App() {
         </aside>
 
         {/* Main Content Area */}
-        <div className="flex-1 flex flex-col bg-zinc-950/20 relative">
+        <div className="flex-1 flex flex-col bg-zinc-950/20 relative min-h-0">
           {activeTab === "chat" ? (
             <>
               <ScrollArea className="flex-1 px-4 py-6" viewportRef={scrollRef}>
