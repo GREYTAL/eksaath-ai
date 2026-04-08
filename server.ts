@@ -29,11 +29,15 @@ async function startServer() {
     users: Set<string>;
   }> = {};
 
+  // Track socket to user/group mapping for cleanup
+  const socketMap: Record<string, { groupId: string; userName: string }> = {};
+
   io.on("connection", (socket) => {
     console.log("User connected:", socket.id);
 
     socket.on("join-group", ({ groupId, userName }) => {
       socket.join(groupId);
+      socketMap[socket.id] = { groupId, userName };
       
       if (!groups[groupId]) {
         groups[groupId] = {
@@ -57,6 +61,7 @@ async function startServer() {
       });
 
       // Notify others
+      io.to(groupId).emit("user-list-update", Array.from(groups[groupId].users));
       socket.to(groupId).emit("user-joined", userName);
     });
 
@@ -86,6 +91,16 @@ async function startServer() {
     });
 
     socket.on("disconnect", () => {
+      const mapping = socketMap[socket.id];
+      if (mapping) {
+        const { groupId, userName } = mapping;
+        if (groups[groupId]) {
+          groups[groupId].users.delete(userName);
+          io.to(groupId).emit("user-list-update", Array.from(groups[groupId].users));
+          socket.to(groupId).emit("user-left", userName);
+        }
+        delete socketMap[socket.id];
+      }
       console.log("User disconnected:", socket.id);
     });
   });

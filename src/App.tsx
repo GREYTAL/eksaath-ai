@@ -84,8 +84,20 @@ export default function App() {
       setResources((prev) => [...prev, resource]);
     });
 
+    socket.on("user-list-update", (userList: string[]) => {
+      setUsers(userList);
+    });
+
     socket.on("user-joined", (userName: string) => {
-      setUsers((prev) => [...new Set([...prev, userName])]);
+      // Handled by user-list-update, but we could add a toast here if we wanted
+    });
+
+    socket.on("user-left", (userName: string) => {
+      setTypingUsers((prev) => {
+        const next = new Set(prev);
+        next.delete(userName);
+        return next;
+      });
     });
 
     socket.on("user-typing", ({ userName, isTyping }) => {
@@ -102,7 +114,9 @@ export default function App() {
       socket.off("new-message");
       socket.off("new-resource");
       socket.off("notes-updated");
+      socket.off("user-list-update");
       socket.off("user-joined");
+      socket.off("user-left");
       socket.off("user-typing");
     };
   }, [socket]);
