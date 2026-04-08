@@ -20,11 +20,12 @@ async function startServer() {
   const PORT = 3000;
 
   // In-memory state for groups and messages
-  // In a real app, this would be a database
   const groups: Record<string, {
     id: string;
     name: string;
     messages: any[];
+    resources: any[];
+    notes: string;
     users: Set<string>;
   }> = {};
 
@@ -39,6 +40,8 @@ async function startServer() {
           id: groupId,
           name: `Group ${groupId}`,
           messages: [],
+          resources: [],
+          notes: "",
           users: new Set(),
         };
       }
@@ -48,12 +51,20 @@ async function startServer() {
       // Send current state to the joining user
       socket.emit("group-data", {
         messages: groups[groupId].messages,
+        resources: groups[groupId].resources,
+        notes: groups[groupId].notes,
         users: Array.from(groups[groupId].users),
       });
 
       // Notify others
       socket.to(groupId).emit("user-joined", userName);
-      console.log(`${userName} joined group ${groupId}`);
+    });
+
+    socket.on("update-notes", ({ groupId, notes }) => {
+      if (groups[groupId]) {
+        groups[groupId].notes = notes;
+        socket.to(groupId).emit("notes-updated", notes);
+      }
     });
 
     socket.on("send-message", ({ groupId, message }) => {
@@ -61,6 +72,17 @@ async function startServer() {
         groups[groupId].messages.push(message);
         io.to(groupId).emit("new-message", message);
       }
+    });
+
+    socket.on("add-resource", ({ groupId, resource }) => {
+      if (groups[groupId]) {
+        groups[groupId].resources.push(resource);
+        io.to(groupId).emit("new-resource", resource);
+      }
+    });
+
+    socket.on("typing", ({ groupId, userName, isTyping }) => {
+      socket.to(groupId).emit("user-typing", { userName, isTyping });
     });
 
     socket.on("disconnect", () => {

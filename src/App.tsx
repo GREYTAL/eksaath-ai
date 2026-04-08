@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, ChangeEvent } from "react";
 import { io, Socket } from "socket.io-client";
 import { GoogleGenAI } from "@google/genai";
 import { 
@@ -40,9 +40,16 @@ export default function App() {
   const [groupId, setGroupId] = useState("");
   const [isJoined, setIsJoined] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [resources, setResources] = useState<any[]>([]);
+  const [notes, setNotes] = useState("");
   const [users, setUsers] = useState<string[]>([]);
+  const [activeTab, setActiveTab] = useState<"chat" | "notes">("chat");
+  const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
   const [inputText, setInputText] = useState("");
   const [isTypingAI, setIsTypingAI] = useState(false);
+  const [isResourceDialogOpen, setIsResourceDialogOpen] = useState(false);
+  const [newResourceTitle, setNewResourceTitle] = useState("");
+  const [newResourceLink, setNewResourceLink] = useState("");
   
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -58,23 +65,45 @@ export default function App() {
   useEffect(() => {
     if (!socket) return;
 
-    socket.on("group-data", ({ messages, users }) => {
+    socket.on("group-data", ({ messages, resources, notes, users }) => {
       setMessages(messages);
+      setResources(resources || []);
+      setNotes(notes || "");
       setUsers(users);
+    });
+
+    socket.on("notes-updated", (newNotes: string) => {
+      setNotes(newNotes);
     });
 
     socket.on("new-message", (message: Message) => {
       setMessages((prev) => [...prev, message]);
     });
 
+    socket.on("new-resource", (resource: any) => {
+      setResources((prev) => [...prev, resource]);
+    });
+
     socket.on("user-joined", (userName: string) => {
       setUsers((prev) => [...new Set([...prev, userName])]);
+    });
+
+    socket.on("user-typing", ({ userName, isTyping }) => {
+      setTypingUsers((prev) => {
+        const next = new Set(prev);
+        if (isTyping) next.add(userName);
+        else next.delete(userName);
+        return next;
+      });
     });
 
     return () => {
       socket.off("group-data");
       socket.off("new-message");
+      socket.off("new-resource");
+      socket.off("notes-updated");
       socket.off("user-joined");
+      socket.off("user-typing");
     };
   }, [socket]);
 
@@ -91,9 +120,18 @@ export default function App() {
     }
   };
 
+  const handleInputChange = (e: ChangeEvent<HTMLInputElement>) => {
+    setInputText(e.target.value);
+    if (socket) {
+      socket.emit("typing", { groupId, userName, isTyping: e.target.value.length > 0 });
+    }
+  };
+
   const sendMessage = async (e?: any) => {
     e?.preventDefault();
     if (!inputText.trim() || !socket) return;
+
+    socket.emit("typing", { groupId, userName, isTyping: false });
 
     const userMessage: Message = {
       id: Math.random().toString(36).substr(2, 9),
@@ -141,6 +179,29 @@ export default function App() {
       console.error("AI Error:", error);
     } finally {
       setIsTypingAI(false);
+    }
+  };
+
+  const handleNotesChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
+    const newNotes = e.target.value;
+    setNotes(newNotes);
+    if (socket) {
+      socket.emit("update-notes", { groupId, notes: newNotes });
+    }
+  };
+  const addResource = () => {
+    if (newResourceTitle && newResourceLink && socket) {
+      const resource = {
+        id: Math.random().toString(36).substr(2, 9),
+        title: newResourceTitle,
+        link: newResourceLink,
+        addedBy: userName,
+        timestamp: Date.now(),
+      };
+      socket.emit("add-resource", { groupId, resource });
+      setNewResourceTitle("");
+      setNewResourceLink("");
+      setIsResourceDialogOpen(false);
     }
   };
 
@@ -257,6 +318,36 @@ export default function App() {
         {/* Sidebar - Desktop */}
         <aside className="hidden lg:flex w-64 border-r border-zinc-800 flex-col bg-zinc-900/10">
           <div className="p-4 space-y-6">
+            <div className="space-y-3">
+              <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500 px-2">Navigation</h3>
+              <div className="grid gap-1">
+                <Button 
+                  variant={activeTab === "chat" ? "secondary" : "ghost"} 
+                  className={cn(
+                    "justify-start gap-2 text-xs h-9",
+                    activeTab === "chat" ? "bg-zinc-800 text-white" : "text-zinc-400 hover:text-white"
+                  )}
+                  onClick={() => setActiveTab("chat")}
+                >
+                  <MessageSquare className="w-3.5 h-3.5" />
+                  Group Chat
+                </Button>
+                <Button 
+                  variant={activeTab === "notes" ? "secondary" : "ghost"} 
+                  className={cn(
+                    "justify-start gap-2 text-xs h-9",
+                    activeTab === "notes" ? "bg-zinc-800 text-white" : "text-zinc-400 hover:text-white"
+                  )}
+                  onClick={() => setActiveTab("notes")}
+                >
+                  <BookOpen className="w-3.5 h-3.5" />
+                  Collaborative Notes
+                </Button>
+              </div>
+            </div>
+
+            <Separator className="bg-zinc-800/50" />
+
             <div className="space-y-2">
               <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500 px-2">Collaborators</h3>
               <div className="space-y-1">
@@ -277,17 +368,32 @@ export default function App() {
             <Separator className="bg-zinc-800/50" />
 
             <div className="space-y-3">
-              <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500 px-2">Quick Actions</h3>
-              <div className="grid gap-2">
-                <Button variant="outline" className="justify-start gap-2 border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800 text-xs h-9">
-                  <BookOpen className="w-3.5 h-3.5" />
-                  Shared Notes
-                </Button>
-                <Button variant="outline" className="justify-start gap-2 border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800 text-xs h-9">
-                  <Sparkles className="w-3.5 h-3.5" />
-                  AI Summary
-                </Button>
+              <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500 px-2">Shared Resources</h3>
+              <div className="space-y-2 max-h-[300px] overflow-y-auto px-2">
+                {resources.map((res) => (
+                  <a 
+                    key={res.id} 
+                    href={res.link} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="block p-2 rounded-lg bg-zinc-900/50 border border-zinc-800 hover:border-indigo-500/50 transition-all group"
+                  >
+                    <p className="text-xs font-medium text-zinc-200 group-hover:text-white truncate">{res.title}</p>
+                    <p className="text-[9px] text-zinc-500 mt-1">Added by {res.addedBy}</p>
+                  </a>
+                ))}
+                {resources.length === 0 && (
+                  <p className="text-[10px] text-zinc-600 italic px-1">No resources yet.</p>
+                )}
               </div>
+              <Button 
+                variant="outline" 
+                className="w-full justify-start gap-2 border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800 text-xs h-9"
+                onClick={() => setIsResourceDialogOpen(true)}
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Add Resource
+              </Button>
             </div>
           </div>
           
@@ -300,115 +406,198 @@ export default function App() {
           </div>
         </aside>
 
-        {/* Chat Area */}
+        {/* Main Content Area */}
         <div className="flex-1 flex flex-col bg-zinc-950/20 relative">
-          <ScrollArea className="flex-1 px-4 py-6" viewportRef={scrollRef}>
-            <div className="max-w-3xl mx-auto space-y-6">
-              <AnimatePresence initial={false}>
-                {messages.map((msg) => (
-                  <motion.div
-                    key={msg.id}
-                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    className={cn(
-                      "flex gap-3",
-                      msg.sender === userName ? "flex-row-reverse" : "flex-row"
-                    )}
-                  >
-                    <Avatar className={cn(
-                      "w-8 h-8 shrink-0 ring-1 ring-zinc-800",
-                      msg.isAI ? "bg-indigo-600" : "bg-zinc-800"
-                    )}>
-                      {msg.isAI ? (
-                        <Sparkles className="w-4 h-4 text-white" />
-                      ) : (
-                        <AvatarFallback className="text-[10px] font-bold">{msg.sender[0].toUpperCase()}</AvatarFallback>
-                      )}
-                    </Avatar>
-                    
-                    <div className={cn(
-                      "flex flex-col max-w-[80%]",
-                      msg.sender === userName ? "items-end" : "items-start"
-                    )}>
-                      <div className="flex items-center gap-2 mb-1 px-1">
-                        <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">
-                          {msg.sender === userName ? "You" : msg.sender}
-                        </span>
-                        <span className="text-[9px] text-zinc-600">
-                          {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
+          {activeTab === "chat" ? (
+            <>
+              <ScrollArea className="flex-1 px-4 py-6" viewportRef={scrollRef}>
+                <div className="max-w-3xl mx-auto space-y-6">
+                  <AnimatePresence initial={false}>
+                    {messages.map((msg) => (
+                      <motion.div
+                        key={msg.id}
+                        initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        className={cn(
+                          "flex gap-3",
+                          msg.sender === userName ? "flex-row-reverse" : "flex-row"
+                        )}
+                      >
+                        <Avatar className={cn(
+                          "w-8 h-8 shrink-0 ring-1 ring-zinc-800",
+                          msg.isAI ? "bg-indigo-600" : "bg-zinc-800"
+                        )}>
+                          {msg.isAI ? (
+                            <Sparkles className="w-4 h-4 text-white" />
+                          ) : (
+                            <AvatarFallback className="text-[10px] font-bold">{msg.sender[0].toUpperCase()}</AvatarFallback>
+                          )}
+                        </Avatar>
+                        
+                        <div className={cn(
+                          "flex flex-col max-w-[80%]",
+                          msg.sender === userName ? "items-end" : "items-start"
+                        )}>
+                          <div className="flex items-center gap-2 mb-1 px-1">
+                            <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">
+                              {msg.sender === userName ? "You" : msg.sender}
+                            </span>
+                            <span className="text-[9px] text-zinc-600">
+                              {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          </div>
+                          
+                          <div className={cn(
+                            "px-4 py-2.5 rounded-2xl text-sm leading-relaxed shadow-sm",
+                            msg.sender === userName 
+                              ? "bg-indigo-600 text-white rounded-tr-none" 
+                              : msg.isAI 
+                                ? "bg-zinc-900 border border-indigo-500/30 text-zinc-100 rounded-tl-none"
+                                : "bg-zinc-900 border border-zinc-800 text-zinc-200 rounded-tl-none"
+                          )}>
+                            {msg.text}
+                          </div>
+                        </div>
+                      </motion.div>
+                    ))}
+                  </AnimatePresence>
+                  
+                  {isTypingAI && (
+                    <motion.div 
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      className="flex gap-3"
+                    >
+                      <Avatar className="w-8 h-8 bg-indigo-600 flex items-center justify-center">
+                        <Sparkles className="w-4 h-4 text-white animate-pulse" />
+                      </Avatar>
+                      <div className="bg-zinc-900 border border-indigo-500/30 px-4 py-2.5 rounded-2xl rounded-tl-none">
+                        <div className="flex gap-1">
+                          <div className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce [animation-delay:-0.3s]" />
+                          <div className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce [animation-delay:-0.15s]" />
+                          <div className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" />
+                        </div>
                       </div>
-                      
-                      <div className={cn(
-                        "px-4 py-2.5 rounded-2xl text-sm leading-relaxed shadow-sm",
-                        msg.sender === userName 
-                          ? "bg-indigo-600 text-white rounded-tr-none" 
-                          : msg.isAI 
-                            ? "bg-zinc-900 border border-indigo-500/30 text-zinc-100 rounded-tl-none"
-                            : "bg-zinc-900 border border-zinc-800 text-zinc-200 rounded-tl-none"
-                      )}>
-                        {msg.text}
-                      </div>
-                    </div>
-                  </motion.div>
-                ))}
-              </AnimatePresence>
-              
-              {isTypingAI && (
-                <motion.div 
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  className="flex gap-3"
+                    </motion.div>
+                  )}
+                </div>
+              </ScrollArea>
+
+              {/* Input Area */}
+              <div className="p-4 border-t border-zinc-800 bg-zinc-900/30 backdrop-blur-md shrink-0">
+                {typingUsers.size > 0 && (
+                  <div className="max-w-3xl mx-auto mb-2">
+                    <p className="text-[10px] text-zinc-500 italic">
+                      {Array.from(typingUsers).filter(u => u !== userName).join(", ")} {typingUsers.size === 1 && !typingUsers.has(userName) ? "is" : "are"} typing...
+                    </p>
+                  </div>
+                )}
+                <form 
+                  onSubmit={sendMessage}
+                  className="max-w-3xl mx-auto relative flex items-center gap-2"
                 >
-                  <Avatar className="w-8 h-8 bg-indigo-600 flex items-center justify-center">
-                    <Sparkles className="w-4 h-4 text-white animate-pulse" />
-                  </Avatar>
-                  <div className="bg-zinc-900 border border-indigo-500/30 px-4 py-2.5 rounded-2xl rounded-tl-none">
-                    <div className="flex gap-1">
-                      <div className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce [animation-delay:-0.3s]" />
-                      <div className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce [animation-delay:-0.15s]" />
-                      <div className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" />
+                  <div className="relative flex-1">
+                    <Input 
+                      placeholder="Ask a question or type @ai for help..."
+                      className="bg-zinc-950/50 border-zinc-800 h-12 pr-12 focus:ring-indigo-500/50 text-white rounded-xl"
+                      value={inputText}
+                      onChange={handleInputChange}
+                    />
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                      <Badge variant="outline" className="text-[9px] h-5 px-1.5 border-zinc-700 text-zinc-500 hidden sm:flex">
+                        Enter to send
+                      </Badge>
                     </div>
                   </div>
-                </motion.div>
-              )}
-            </div>
-          </ScrollArea>
-
-          {/* Input Area */}
-          <div className="p-4 border-t border-zinc-800 bg-zinc-900/30 backdrop-blur-md shrink-0">
-            <form 
-              onSubmit={sendMessage}
-              className="max-w-3xl mx-auto relative flex items-center gap-2"
-            >
-              <div className="relative flex-1">
-                <Input 
-                  placeholder="Ask a question or type @ai for help..."
-                  className="bg-zinc-950/50 border-zinc-800 h-12 pr-12 focus:ring-indigo-500/50 text-white rounded-xl"
-                  value={inputText}
-                  onChange={(e) => setInputText(e.target.value)}
-                />
-                <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
-                  <Badge variant="outline" className="text-[9px] h-5 px-1.5 border-zinc-700 text-zinc-500 hidden sm:flex">
-                    Enter to send
+                  <Button 
+                    type="submit"
+                    size="icon"
+                    className="h-12 w-12 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl shadow-lg shadow-indigo-500/10 shrink-0 transition-transform active:scale-90"
+                    disabled={!inputText.trim()}
+                  >
+                    <Send className="w-5 h-5" />
+                  </Button>
+                </form>
+                <p className="text-[10px] text-center text-zinc-600 mt-2">
+                  Collaborative AI Sandbox • Powered by Gemini 3 Flash
+                </p>
+              </div>
+            </>
+          ) : (
+            <div className="flex-1 flex flex-col p-6">
+              <div className="max-w-4xl mx-auto w-full flex-1 flex flex-col space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-xl font-bold text-white">Collaborative Notes</h2>
+                    <p className="text-xs text-zinc-500">Real-time shared notes for your study group</p>
+                  </div>
+                  <Badge variant="outline" className="border-indigo-500/30 text-indigo-400">
+                    Auto-saving
                   </Badge>
                 </div>
+                <textarea
+                  className="flex-1 bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6 text-zinc-200 focus:outline-none focus:ring-1 focus:ring-indigo-500/50 resize-none font-mono text-sm leading-relaxed"
+                  placeholder="Start typing your shared notes here..."
+                  value={notes}
+                  onChange={handleNotesChange}
+                />
               </div>
-              <Button 
-                type="submit"
-                size="icon"
-                className="h-12 w-12 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl shadow-lg shadow-indigo-500/10 shrink-0 transition-transform active:scale-90"
-                disabled={!inputText.trim()}
-              >
-                <Send className="w-5 h-5" />
-              </Button>
-            </form>
-            <p className="text-[10px] text-center text-zinc-600 mt-2">
-              Collaborative AI Sandbox • Powered by Gemini 3 Flash
-            </p>
-          </div>
+            </div>
+          )}
         </div>
       </main>
+
+      {/* Resource Dialog */}
+      <AnimatePresence>
+        {isResourceDialogOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-sm bg-zinc-900 border border-zinc-800 rounded-2xl p-6 shadow-2xl"
+            >
+              <h2 className="text-xl font-bold text-white mb-4">Add Shared Resource</h2>
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-xs font-semibold text-zinc-500 uppercase">Title</label>
+                  <Input 
+                    placeholder="e.g. Physics Formulas PDF" 
+                    className="bg-zinc-950 border-zinc-800 text-white"
+                    value={newResourceTitle}
+                    onChange={(e) => setNewResourceTitle(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-semibold text-zinc-500 uppercase">Link / URL</label>
+                  <Input 
+                    placeholder="https://..." 
+                    className="bg-zinc-950 border-zinc-800 text-white"
+                    value={newResourceLink}
+                    onChange={(e) => setNewResourceLink(e.target.value)}
+                  />
+                </div>
+                <div className="flex gap-3 pt-2">
+                  <Button 
+                    variant="ghost" 
+                    className="flex-1 text-zinc-400 hover:text-white hover:bg-zinc-800"
+                    onClick={() => setIsResourceDialogOpen(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button 
+                    className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white"
+                    onClick={addResource}
+                    disabled={!newResourceTitle || !newResourceLink}
+                  >
+                    Add to Group
+                  </Button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
