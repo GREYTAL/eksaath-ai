@@ -24,7 +24,7 @@ import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 
 // Initialize Gemini
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const ai = new GoogleGenAI("AIzaSyD2mmUFNvih2sBShM7OXfSarWkyIcPPEs0");
 
 interface Message {
   id: string;
